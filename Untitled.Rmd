@@ -1,0 +1,251 @@
+---
+title: "Lab #4"
+output: github_document
+---
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+require(class)
+require(caret)
+load("BRFSS2022_rev.RData")
+brfss22$Age_midpt <- fct_recode(brfss22$X_AGEG5YR, "21" = "Age 18 to 24",
+                                "27" = "Age 25 to 29", "32" = "Age 30 to 34",
+                                "37" = "Age 35 to 39", "42" = "Age 40 to 44",
+                                "47" = "Age 45 to 49", "52" = "Age 50 to 54",
+                                "57" = "Age 55 to 59", "62" = "Age 60 to 64",
+                                "67" = "Age 65 to 69", "72" = "Age 70 to 74",
+                                "77" = "Age 75 to 79", "82" = "Age 80 or older",
+                                NULL = "Dont know/Refused/Missing")
+brfss22$Age_midpt <- as.numeric(levels(brfss22$Age_midpt))[brfss22$Age_midpt]
+brfss22$Educ_number <- fct_recode(brfss22$EDUCA, 
+                                  "0" = "Never attended school or only kindergarten", 
+                                  "4.5" = "Grades 1 through 8 (Elementary)",
+                                  "10" = "Grades 9 through 11 (Some high school)",
+                                  "12" = "Grade 12 or GED (High school graduate)",
+                    "14" = "College 1 year to 3 years (Some college or technical school)",
+                    "16" = "College 4 years or more (College graduate)",
+                    NULL = "Refused" )
+brfss22$Educ_number <- as.numeric(levels(brfss22$Educ_number))[brfss22$Educ_number]
+
+ACEdidntask <- (as.numeric(is.na(brfss22$ACEDEPRS)) + 
+                        as.numeric(is.na(brfss22$ACEDRINK)) +
+                        as.numeric(is.na(brfss22$ACEDRUGS)) +
+                        as.numeric(is.na(brfss22$ACEPRISN)) +
+                        as.numeric(is.na(brfss22$ACEDIVRC)) +
+                        as.numeric(is.na(brfss22$ACEPUNCH)) +
+                        as.numeric(is.na(brfss22$ACEHURT1)) +
+                        as.numeric(is.na(brfss22$ACESWEAR)) +
+                        as.numeric(is.na(brfss22$ACETOUCH)) )
+select_ACE <- (ACEdidntask == 0) & !is.na(brfss22$MENTHLTH) # with zero missing values for any of ACE questions and not missing MENTLHLTH
+brfss_ACE <- subset(brfss22, select_ACE)
+```
+
+```{r}
+summary(brfss_ACE$MENTHLTH[brfss_ACE$ACETOUCH == "Adverse Childhood Exper, never:  How often did anyone at least 5 years older than you or an adult, ever touch you sexually"])
+```
+
+```{r}
+summary(brfss_ACE$MENTHLTH[brfss_ACE$ACETOUCH == "once"])
+```
+
+```{r}
+summary(brfss_ACE$MENTHLTH[brfss_ACE$ACETOUCH == "more than once"])
+```
+
+```{r}
+sd(brfss_ACE$MENTHLTH[brfss_ACE$ACETOUCH == "Adverse Childhood Exper, never:  How often did anyone at least 5 years older than you or an adult, ever touch you sexually"], na.rm = TRUE)
+```
+
+```{r}
+sd(brfss_ACE$MENTHLTH[brfss_ACE$ACETOUCH == "once"], na.rm = TRUE)
+```
+
+```{r}
+sd(brfss_ACE$MENTHLTH[brfss_ACE$ACETOUCH == "more than once"], na.rm = TRUE)
+```
+
+```{r}
+summary(brfss_ACE$ACETOUCH) # N in each group
+```
+
+```{r}
+# is there an easier way?!?
+library(plyr)
+summary1 <- ddply(brfss_ACE,.(ACETOUCH), summarize, mean_mentalhealth = mean(MENTHLTH), 
+                  sd_mentalhealth = sd(MENTHLTH), n_obs = sum(!is.na(MENTHLTH)) )
+summary1
+```
+
+```{r}
+summary2 <- ddply(brfss_ACE,.(MENTHLTH >0), summarize, 
+                  zero_ACETOUCH = sum(ACETOUCH == "Adverse Childhood Exper, never:  How often did anyone at least 5 years older than you or an adult, ever touch you sexually"), 
+                  once_ACETOUCH = sum(ACETOUCH == "once"), 
+                  mult_ACETOUCH = sum(ACETOUCH == "more than once") )
+summary2
+```
+
+```{r}
+brfss_ACE$ACETOUCH_recode <- fct_recode(brfss_ACE$ACETOUCH, 
+                                        "0" = "Adverse Childhood Exper, never:  How often did anyone at least 5 years older than you or an adult, ever touch you sexually",
+                                "0.5" = "once", 
+                                "1" = "more than once",
+                                NULL = "dont know not sure",
+                                NULL = "refused"
+)
+brfss_ACE$ACEHURT_recode <- fct_recode(brfss_ACE$ACEHURT1, 
+                                        "0" = "Adverse Childhood Exper, never: Not including spanking, (before age 18), how often did a parent or adult in your home ever hit, beat, kick, or physically hurt you in any way",
+                                "0.5" = "once", 
+                                "1" = "more than once",
+                                NULL = "dont know not sure",
+                                NULL = "refused"
+)
+brfss_ACE$ACETOUCH_recode <- as.numeric(levels(brfss_ACE$ACETOUCH_recode))[brfss_ACE$ACETOUCH_recode]
+brfss_ACE$ACEHURT_recode <- as.numeric(levels(brfss_ACE$ACEHURT_recode))[brfss_ACE$ACEHURT_recode]
+
+brfss_ACE$MENTHLTH_recode <- cut(brfss_ACE$MENTHLTH, breaks = c(-1,0,1,5,10,15,31))
+summary(brfss_ACE$MENTHLTH_recode)
+```
+
+```{r}
+# create a function to standardize
+standardize_varb_to01 <- function(X_in) {
+  (X_in - min(X_in, na.rm = TRUE))/( max(X_in, na.rm = TRUE) - min(X_in, na.rm = TRUE)  )
+}
+```
+
+```{r}
+X1 <- standardize_varb_to01(brfss_ACE$Age_midpt)
+X2 <- standardize_varb_to01(brfss_ACE$Educ_number)
+X3 <- brfss_ACE$ACETOUCH_recode
+X4 <- brfss_ACE$ACEHURT_recode
+# you could add more X variables...
+Y <- brfss_ACE$MENTHLTH_recode
+
+nonmissingobs <- complete.cases(Y,X1,X2,X3,X4)
+
+X1 <- subset(X1, nonmissingobs)
+X2 <- subset(X2, nonmissingobs)
+X3 <- subset(X3, nonmissingobs)
+X4 <- subset(X4, nonmissingobs)
+dat_use <- data.frame(X1,X2,X3,X4)
+Y <- subset(Y, nonmissingobs)
+```
+
+```{r}
+set.seed(1234)
+NN_obs <- length(Y)
+select1 <- (runif(NN_obs) < 0.6)
+train_data <- subset(dat_use,select1)
+test_data <- subset(dat_use,(!select1))
+cl_data <- Y[select1]
+true_data <- Y[!select1]
+```
+
+```{r}
+for (indx in seq(1, 9, by= 2)) {
+ pred_y <- knn3Train(train_data, test_data, cl_data, k = indx, l = 0, prob = FALSE, use.all = TRUE)
+ num_correct_labels <- sum(pred_y == true_data)
+ correct_rate <- num_correct_labels/length(true_data)
+ print(c(indx,correct_rate))
+}
+```
+
+```{r}
+summary(brfss22)
+```
+
+```{r}
+brfss22$income_midpoint <- fct_recode(brfss22$INCOME3, "7500" = "Household income less than $10,000",
+                                      "12500" = "Less than $15,000 ($10,000 to less than $15,000)",
+                                      "17500" = "Less than $20,000 ($15,000 to less than $20,000) ", # fukkin extra space!
+                                      "22500" = "Less than $25,000 ($20,000 to less than $25,000) ",
+                                      "30000" = "Less than $35,000 ($25,000 to less than $35,000) ",
+                                      "42500" = "Less than $50,000 ($35,000 to less than $50,000) ",
+                                      "62500" = "Less than $75,000 ($50,000 to less than $75,000)",
+                                      "87500" = "Less than $100,000 ($75,000 to less than $100,000)",
+                                      "125000" = "Less than $150,000 ($100,000 to less than $150,000)",
+                                      "175000" = "Less than $200,000 ($150,000 to less than $200,000)",
+                                      "210000" = "$200,000 or more",
+                                      NULL = "Dont know/Not sure",
+                                      NULL = "Refused")
+```
+
+```{r}
+ACEdidntask <- (as.numeric(is.na(brfss22$ACEDEPRS)) + 
+                        as.numeric(is.na(brfss22$ACEDRINK)) +
+                        as.numeric(is.na(brfss22$ACEDRUGS)) +
+                        as.numeric(is.na(brfss22$ACEPRISN)) +
+                        as.numeric(is.na(brfss22$ACEDIVRC)) +
+                        as.numeric(is.na(brfss22$ACEPUNCH)) +
+                        as.numeric(is.na(brfss22$ACEHURT1)) +
+                        as.numeric(is.na(brfss22$ACESWEAR)) +
+                        as.numeric(is.na(brfss22$ACETOUCH)) )
+select_ACE <- (ACEdidntask == 0) & !is.na(brfss22$MENTHLTH) # with zero missing values for any of ACE questions and not missing MENTLHLTH
+brfss_ACE <- subset(brfss22, select_ACE)
+```
+
+```{r}
+summary(brfss_ACE)
+```
+
+```{r}
+brfss_ACE$ACEPUNCH_recode <- fct_recode(brfss_ACE$ACEPUNCH, 
+                                        "0" = "Adverse Childhood Exper, never: How often did your parents or adults in your home ever slap, hit, kick, punch or beat each other up",
+                                "0.5" = "once", 
+                                "1" = "more than once",
+                                NULL = "dont know not sure",
+                                NULL = "refused"
+)
+
+brfss_ACE$ACEPUNCH_recode <- as.numeric(levels(brfss_ACE$ACEPUNCH_recode))[brfss_ACE$ACEPUNCH_recode]
+```
+
+```{r}
+summary(brfss_ACE$ACEPUNCH_recode)
+```
+
+```{r}
+brfss_ACE$ACESWEAR_recode <- fct_recode(brfss_ACE$ACESWEAR, 
+                                        "0" = "Adverse Childhood Exper, never: How often did a parent or adult in your home ever swear at you, insult you, or put you down",
+                                "0.5" = "once", 
+                                "1" = "more than once",
+                                NULL = "dont know not sure",
+                                NULL = "refused"
+)
+
+brfss_ACE$ACESWEAR_recode <- as.numeric(levels(brfss_ACE$ACESWEAR_recode))[brfss_ACE$ACESWEAR_recode]
+```
+
+```{r}
+summary(brfss_ACE$ACESWEAR_recode)
+```
+
+```{r}
+brfss_ACE$ACEDRUGS_recode <- fct_recode(brfss_ACE$ACEDRUGS, 
+                                        "0" = "Yes, Adverse Childhood Exper, lived with someone who used illegal street drugs or who abused prescription medications",
+                                "0.5" = "No", 
+                                NULL = "dont know not sure",
+                                NULL = "refused"
+)
+
+brfss_ACE$ACEDRUGS_recode <- as.numeric(levels(brfss_ACE$ACEDRUGS_recode))[brfss_ACE$ACEDRUGS_recode]
+```
+
+```{r}
+summary(brfss_ACE$ACEDRUGS_recode)
+```
+
+
+```{r}
+brfss_ACE$MENTHLTH_recode <- cut(brfss_ACE$MENTHLTH, breaks = c(-1,0,1,5,10,15,31))
+summary(brfss_ACE$MENTHLTH_recode)
+```
+
+
+
+
+
+
+
+
